@@ -1497,7 +1497,7 @@ function asisBlock(key){
   h+='</section>';
   if(CLOUD.editor){
     const si=act.filter(i=>st(i.id)==='si'), no=act.filter(i=>st(i.id)==='no'), na=act.filter(i=>!st(i.id));
-    const chip=(i,c)=>'<button class="asis-chip '+c+'" title="Clic para cambiar" onclick="asisCycle(\''+key+'\',\''+i.id+'\')">'+_esc(i.nombre.split(' ')[0]+(i.nombre.split(' ')[1]?' '+i.nombre.split(' ')[1][0]+'.':''))+'</button>';
+    const chip=(i,c)=>'<button class="asis-chip '+c+'" title="Clic para cambiar" onclick="asisCycle(\''+key+'\',\''+i.id+'\')">'+_esc((w=>w[0]+(w[1]?' '+w[1][0]+'.':''))(i.nombre.split(' ').filter(x=>/^[A-Za-zÁÉÍÓÚÑÜáéíóúñü]/.test(x))))+'</button>';
     h+='<section class="asis-sum"><h3>Asistencia del equipo</h3><div class="asis-bar"><span><b>'+si.length+'</b>confirman</span><span><b>'+no.length+'</b>no pueden</span><span><b>'+na.length+'</b>sin responder</span></div>'
       +'<div class="asis-chips">'+si.map(i=>chip(i,'si')).join('')+no.map(i=>chip(i,'no')).join('')+na.map(i=>chip(i,'na')).join('')+'</div>'
       +(na.length?'<button class="btn-secondary" style="width:100%;justify-content:center" onclick="asisRemind(\''+key+'\')"><i class="fa-brands fa-whatsapp"></i> Recordar a los que faltan</button>':'')+'</section>';
