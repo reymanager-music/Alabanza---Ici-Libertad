@@ -4442,26 +4442,40 @@ function impBarsInto(sec,s,chordOk,warn){
 const IMP_CHORD=/^[A-G](#|b)?(m|M|maj|min|dim|aug|sus|add|\+|°|ø)?[0-9]*((sus|add|maj|M)?[0-9]+|b[0-9]+|#[0-9]+|\([^)]*\))*(\/[A-G](#|b)?)?$/;
 function impChordTok(t){ return IMP_CHORD.test(t)||/^N\.?C\.?$/i.test(t); }
 function impIsBarText(t){ return t.split(/\r?\n/).some(l=>/^\s*(\[?[^|:\[\]]+\]?\s*([x×]\s*\d+)?\s*:\s*)?\|.+\|\s*$/.test(l)); }
+function impNorm(t){ return String(t||'').replace(/<[^>]+>/g,'').replace(/[​-‍⁠﻿­]/g,'').replace(/[  -   　]/g,' ').replace(/[♯]/g,'#').replace(/[♭]/g,'b').replace(/\r\n?/g,'\n'); }
 function impParseChart(txt){
+  txt=impNorm(txt);
   const meta={title:'',composer:'',fifths:null,mode:'major',bpm:'',time:'4/4',tono:''}; const blocks=[]; let cur=null;
-  const lines=txt.split(/\r?\n/).map(l=>l.replace(/\t/g,'    ').trim());
-  const isChordLine=l=>{ const tk=l.split(/\s+/).filter(t=>t&&!/^[-|/–—·.:]+$/.test(t)&&!/^\(?[x×]\d+\)?$/i.test(t)); return tk.length>0&&tk.every(impChordTok); };
+  const lines=txt.split('\n').map(l=>l.replace(/\t/g,'    ').trim());
+  const SEP=t=>/^[-|/–—·.:]+$/.test(t)||/^\(?[x×]\d+\)?$/i.test(t);
+  const toks=l=>l.split(/\s+/).filter(t=>t&&!SEP(t));
+  const isChordLine=l=>{ const tk=toks(l); return tk.length>0&&tk.every(impChordTok); };
   const header=l=>{ let m=l.match(/^[\[\(]\s*([^\]\)]+?)\s*[\]\)]\s*(?:[x×]\s*(\d+))?\s*:?\s*$/); if(m&&impIsSecText(m[1])) return m;
     if(impIsSecText(l)&&l.length<28&&!isChordLine(l)){ m=l.match(/^([^:]+?)\s*:?\s*(?:[x×]\s*(\d+))?\s*$/); if(m) return m; } return null; };
+  const open=(name,rep)=>{ cur={name:impSecName(name),bars:[],cues:[],rep:rep||0}; blocks.push(cur); };
+  const addBars=(tk,cue)=>{ if(!cur){ cur={name:'SECCIÓN 1',bars:[],cues:[],rep:0}; blocks.push(cur); } tk.forEach((t,k)=>{ cur.bars.push([[/^N\.?C\.?$/i.test(t)?'N.C.':t,4]]); cur.cues.push(k===0?cue:''); }); };
+  const nextLyric=i=>{ for(let j=i+1;j<lines.length;j++){ if(!lines[j]) continue; if(isChordLine(lines[j])||header(lines[j])) return ''; return lines[j]; } return ''; };
   for(let i=0;i<lines.length;i++){
     const line=lines[i]; if(!line) continue; let m;
     if((m=line.match(/^(tono|tonalidad|key|tom)\s*:\s*([A-G][#b]?m?)\b/i))){ meta.tono=m[2]; continue; }
     if((m=line.match(/^bpm\s*:\s*(\d+)/i))){ meta.bpm=parseInt(m[1]); continue; }
-    const h=header(line); if(h){ cur={name:impSecName(h[1]),bars:[],cues:[],rep:h[2]?parseInt(h[2]):0}; blocks.push(cur); continue; }
-    if(isChordLine(line)){
-      if(!cur){ cur={name:'SECCIÓN 1',bars:[],cues:[],rep:0}; blocks.push(cur); }
-      let cue=''; for(let j=i+1;j<lines.length;j++){ if(!lines[j]) continue; if(isChordLine(lines[j])||header(lines[j])) break; cue=lines[j]; break; }
-      line.split(/\s+/).filter(t=>t&&!/^[-|/–—·.:]+$/.test(t)&&!/^\(?[x×]\d+\)?$/i.test(t)).forEach((t,k)=>{ cur.bars.push([[/^N\.?C\.?$/i.test(t)?'N.C.':t,4]]); cur.cues.push(k===0?cue:''); });
-    }
+    // «[Final] D2»  /  «Intro: D G»  → sección + acordes en la misma línea (antes que el encabezado simple)
+    m=line.match(/^[\[\(]\s*([^\]\)]+?)\s*[\]\)]\s*:?\s*(.+)$/)||line.match(/^([A-Za-zÁÉÍÓÚáéíóúñÑ\- ]{3,20}\d?)\s*:\s*(.+)$/);
+    if(m&&impIsSecText(m[1])&&isChordLine(m[2])){ open(m[1],0); addBars(toks(m[2]),''); continue; }
+    const h=header(line); if(h){ open(h[1],h[2]?parseInt(h[2]):0); continue; }
+    if(isChordLine(line)){ addBars(toks(line),nextLyric(i)); continue; }
+    // ChordPro: «[G]Out of the [D]darkness»
+    const inl=[...line.matchAll(/\[([^\]\s]+)\]/g)].map(x=>x[1]);
+    if(inl.length&&inl.every(impChordTok)){ addBars(inl,line.replace(/\[[^\]]*\]/g,'').trim()); continue; }
   }
   const good=blocks.filter(b=>b.bars.length);
   if(!meta.tono&&good.length){ const f=good[0].bars[0][0][0]; const mm=f.match(/^([A-G][#b]?)(m(?!aj))?/); if(mm){ meta.tono=mm[1]+(mm[2]||''); meta.tonoEst=true; } }
   return {meta,blocks:good,form:null,estimated:true,notes:[]};
+}
+function impDiag(t){
+  const L=impNorm(t).split('\n').map(x=>x.trim()).filter(Boolean);
+  const esc=x=>x.slice(0,70).replace(/[^\x20-\x7e]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
+  return 'Leí '+L.length+' líneas y ninguna parecía una línea de acordes. Primeras líneas que vi:\n'+L.slice(0,5).map(esc).join('\n');
 }
 
 // ── Bloques → modelo del lead sheet de la app ──
@@ -4522,10 +4536,10 @@ async function impAnalyze(md){
   try{
     const f=md.querySelector('#imp-file').files[0], t=md.querySelector('#imp-text').value.trim(); let res;
     if(f){ const nm=f.name.toLowerCase(); const xml=nm.endsWith('.mxl')?await impUnzip(await f.arrayBuffer()):await f.text(); res=impParseXml(xml); res.kind='xml'; }
-    else if(t){ res=impIsBarText(t)?impParseText(t):impParseChart(t); res.kind='txt'; if(!res.blocks.length) throw new Error('No encontré acordes. Pega un cifrado (acordes sobre la letra) o compases como: SECCIÓN: | G | D | Em | C |'); }
+    else if(t){ const tn=impNorm(t); res=impIsBarText(tn)?impParseText(tn):impParseChart(tn); res.kind='txt'; if(!res.blocks.length){ const e=new Error('No encontré acordes. Pega un cifrado (acordes sobre la letra) o compases como: SECCIÓN: | G | D | Em | C |'); e.diag=impDiag(t); throw e; } }
     else throw new Error('Elige un archivo o pega los compases.');
     IMP.res=res; impPreview(md);
-  }catch(e){ out.innerHTML='<div style="color:#fca5a5">⚠️ '+String(e.message||e).replace(/</g,'&lt;')+'</div>'; }
+  }catch(e){ out.innerHTML='<div style="color:#fca5a5">⚠️ '+String(e.message||e).replace(/</g,'&lt;')+'</div>'+(e.diag?'<pre style="margin-top:8px;padding:8px;background:#171a20;border-radius:6px;color:#9aa3b2;font-size:11px;white-space:pre-wrap">'+e.diag.replace(/</g,'&lt;')+'</pre>':''); }
 }
 function impTargetShift(){
   const md=document.querySelector('.imp-md'); const v=md.querySelector('#imp-tr').value; const m=IMP.res.meta;
