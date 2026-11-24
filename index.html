@@ -306,7 +306,7 @@ body.ed .ed-only{display:flex!important}
 body.ro [onclick*="delete" i],body.ro [onclick*="edit" i]:not(#cloud-btn),body.ro [onclick*="openAddModal"],
 body.ro [onclick*="save" i],body.ro [onclick*="slAdd"],body.ro [onclick*="slRemove"],body.ro [onclick*="ensRemove"],
 body.ro [onclick*="send" i],body.ro [onclick*="notificar"],body.ro [onclick*="whatsappSetlist"],
-body.ro [onclick*="slDuplicate"],body.ro [onclick*="useSetlistInCalendar"],body.ro [onclick*="lsOpenAddSec"],body.ro [onclick*="lsRmSlot"],
+body.ro [onclick*="slDuplicate"],body.ro [onclick*="lsOpenImport"],body.ro [onclick*="useSetlistInCalendar"],body.ro [onclick*="lsOpenAddSec"],body.ro [onclick*="lsRmSlot"],
 body.ro [onclick*="lsAddSlot"],body.ro [onclick*="'notificaciones'"],body.ro .no-ro,body.ro #sidebar-import{display:none!important}
 </style>
 <style>.sl-ta{width:100%;padding:9px 11px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:12.5px;line-height:1.5;resize:vertical}
@@ -3682,6 +3682,7 @@ function resetAndLoad20Songs(){
       <button id="ls-btn-edit" onclick="lsToggleEdit()" style="padding:7px 14px;border-radius:8px;border:1px solid #555;background:#333;color:#eee;cursor:pointer;font-size:12px;font-family:sans-serif;">✏️ Editar</button>
       <div id="ls-edit-hint" style="display:none;padding:5px 12px;background:#422;border:1px solid #f59e0b;border-radius:7px;font-size:11px;color:#fbbf24;font-family:sans-serif;">Clic en compás para editar · ✕ elimina</div>
       <button id="ls-add-sec-btn" onclick="lsOpenAddSec()" style="display:none;padding:7px 14px;border-radius:8px;border:1px solid #555;background:#333;color:#eee;cursor:pointer;font-size:12px;font-family:sans-serif;">➕ Sección</button>
+      <button id="ls-imp-btn" onclick="lsOpenImport()" style="display:none;padding:7px 14px;border-radius:8px;border:1px solid #2563eb;background:#1e3a8a;color:#fff;cursor:pointer;font-size:12px;font-family:sans-serif;">⬇️ Importar acordes</button>
       <button onclick="lsSave()" style="padding:7px 14px;border:none;border-radius:8px;background:#16a34a;color:#fff;cursor:pointer;font-size:12px;font-family:sans-serif;">💾 Guardar</button>
       <button onclick="window.print()" style="padding:7px 14px;border-radius:8px;border:1px solid #555;background:#333;color:#eee;cursor:pointer;font-size:12px;font-family:sans-serif;">🖨️ Imprimir</button>
     </div>
@@ -4030,7 +4031,13 @@ let lsSong=null, lsEditMode=false, lsMSRC=null, lsMWork=[];
 function openLeadSheet(cancionId){
   const saved = DB.getRaw('ls_'+cancionId);
   lsSong = saved ? saved : (LS[cancionId] ? JSON.parse(JSON.stringify(LS[cancionId])) : null);
-  if(!lsSong){ alert('Lead sheet no disponible para esta canción.'); return; }
+  let lsFresh=false;
+  if(!lsSong){
+    const canEdit=!CLOUD.on||CLOUD.editor; const c=DB.get('canciones').find(x=>x.id===cancionId);
+    if(!canEdit||!c){ alert('Esta canción aún no tiene lead sheet.'); return; }
+    lsSong={title:c.titulo,composer:c.artista||'',key:'',originalKey:(c.tonalidad&&c.tonalidad!=='?')?c.tonalidad:'',bpm:c.bpm||'',time:'4/4',style:c.genero||'',form:'',sections:[]};
+    lsFresh=true;
+  }
   lsSong._cancionId = cancionId;
   lsEditMode = false;
   document.getElementById('ls-overlay').style.display='block';
@@ -4038,7 +4045,9 @@ function openLeadSheet(cancionId){
   document.getElementById('ls-btn-edit').style.color='#eee';
   document.getElementById('ls-edit-hint').style.display='none';
   document.getElementById('ls-add-sec-btn').style.display='none';
+  document.getElementById('ls-imp-btn').style.display='none';
   lsRender();
+  if(lsFresh){ lsToggleEdit(); lsOpenImport(); }
 }
 
 function closeLeadSheet(){ document.getElementById('ls-overlay').style.display='none'; }
@@ -4050,6 +4059,7 @@ function lsToggleEdit(){
   btn.style.color='#fff';
   document.getElementById('ls-edit-hint').style.display=lsEditMode?'flex':'none';
   document.getElementById('ls-add-sec-btn').style.display=lsEditMode?'inline-flex':'none';
+  document.getElementById('ls-imp-btn').style.display=lsEditMode?'inline-flex':'none';
   lsRender();
 }
 
@@ -4273,5 +4283,252 @@ function lsDoAddSec(){ const label=document.getElementById('ns-lbl').value.trim(
 ['ls-m-ov','ls-s-ov'].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('click',e=>{if(e.target===el)el.style.display='none';}); });
 </script>
 
+<script>
+// ══ IMPORTAR ACORDES ═════════════════════════════════════════════════════
+// Entradas: (1) MusicXML (.musicxml / .xml / .mxl) exportado desde MuseScore u otro editor; (2) texto con compases.
+// Respeta la estructura escrita en la partitura: marcas de sección, número de compases, repeticiones y posición de cada acorde.
+const IMP = { res:null, src:'' };
+const IMP_NAMES = [
+  [/pre[\s\-]?(chorus|coro|estribillo)/i,'PRE-CORO'],[/(chorus|coro|estribillo)/i,'CORO'],[/(verse|verso|estrofa)/i,'VERSO'],
+  [/(bridge|puente)/i,'PUENTE'],[/(intro)/i,'INTRO'],[/(outro|final|ending|coda)/i,'FINAL'],[/(interlude|interludio|instrumental)/i,'INTERLUDIO'],
+  [/(tag)/i,'TAG'],[/(turnaround)/i,'TURNAROUND'],[/(vamp)/i,'VAMP']];
+function impSecName(t){ t=(t||'').trim(); for(const [re,n] of IMP_NAMES){ if(re.test(t)) return n; } return t.toUpperCase().slice(0,24); }
+function impIsSecText(t){ return IMP_NAMES.some(([re])=>re.test(t||'')); }
+
+// ── Acordes y transposición ──
+const IMP_KIND={'major':'','minor':'m','augmented':'aug','diminished':'dim','dominant':'7','major-seventh':'maj7','minor-seventh':'m7','diminished-seventh':'dim7','augmented-seventh':'aug7','half-diminished':'m7b5','major-minor':'m(maj7)','major-sixth':'6','minor-sixth':'m6','dominant-ninth':'9','major-ninth':'maj9','minor-ninth':'m9','dominant-11th':'11','major-11th':'maj11','minor-11th':'m11','dominant-13th':'13','major-13th':'maj13','minor-13th':'m13','suspended-second':'sus2','suspended-fourth':'sus4','power':'5','other':''};
+const IMP_SH=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'], IMP_FL=['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'];
+function impPc(n){ const b={C:0,D:2,E:4,F:5,G:7,A:9,B:11}[n[0]]; let a=0; for(const ch of n.slice(1)){ if(ch==='#'||ch==='♯')a++; else if(ch==='b'||ch==='♭')a--; } return ((b+a)%12+12)%12; }
+function impTranspose(ch,semi,flats){
+  if(!ch||!semi) return ch; const m=ch.match(/^([A-G][#b♯♭]*)([^/]*)(?:\/([A-G][#b♯♭]*))?$/); if(!m) return ch;
+  const sp=n=>(flats?IMP_FL:IMP_SH)[((impPc(n)+semi)%12+12)%12];
+  return sp(m[1])+m[2]+(m[3]?'/'+sp(m[3]):'');
+}
+function impPreferFlats(tonicPc,minor){ const rel=minor?(tonicPc+3)%12:tonicPc; return [5,10,3,8,1,6].includes(rel); }
+function impKeyName(fifths,mode){ const maj=((fifths*7)%12+12)%12; const minor=/min/i.test(mode||''); const pc=minor?(maj+9)%12:maj; const fl=fifths<0; return {pc,minor,name:(fl?IMP_FL:IMP_SH)[pc]+(minor?'m':'')}; }
+function impHarmony(h){
+  const g=t=>h.getElementsByTagName(t)[0];
+  const k=g('kind'); const kc=(k&&k.textContent||'').trim();
+  if(kc==='none') return 'N.C.';
+  const rs=g('root-step'); if(!rs) return '';
+  const alt=n=>{ const v=n?parseInt(n.textContent):0; return v>0?'#'.repeat(v):(v<0?'b'.repeat(-v):''); };
+  let s=rs.textContent.trim()+alt(g('root-alter'));
+  let q; const tx=k&&k.getAttribute('text');
+  if(tx!==null&&tx!==undefined&&/^[\x20-\x7e]*$/.test(tx)&&kc!=='major'&&tx!=='') q=tx;
+  else { q=IMP_KIND[kc]; if(q===undefined) q=''; }
+  if(!(tx!==null&&tx!==undefined&&tx!==''&&/^[\x20-\x7e]*$/.test(tx)&&kc!=='major')){
+    [...h.getElementsByTagName('degree')].forEach(d=>{ const v=d.getElementsByTagName('degree-value')[0], a=d.getElementsByTagName('degree-alter')[0], t=d.getElementsByTagName('degree-type')[0]; if(!v||!t)return;
+      const al=a?parseInt(a.textContent):0, pre=al>0?'#':(al<0?'b':''); const ty=t.textContent.trim();
+      q+= ty==='add'?'add'+pre+v.textContent : ty==='subtract'?'no'+v.textContent : pre+v.textContent; });
+  }
+  s+=q; const bs=g('bass-step'); if(bs) s+='/'+bs.textContent.trim()+alt(g('bass-alter'));
+  return s;
+}
+
+// ── MusicXML → bloques ──
+async function impUnzip(buf){
+  const dv=new DataView(buf), u8=new Uint8Array(buf); let e=u8.length-22; while(e>=0&&dv.getUint32(e,true)!==0x06054b50)e--; if(e<0) throw new Error('El archivo .mxl no es válido');
+  const n=dv.getUint16(e+10,true); let p=dv.getUint32(e+16,true); const files={};
+  for(let i=0;i<n;i++){ if(dv.getUint32(p,true)!==0x02014b50)break; const method=dv.getUint16(p+10,true), csize=dv.getUint32(p+20,true), nl=dv.getUint16(p+28,true), el=dv.getUint16(p+30,true), cl=dv.getUint16(p+32,true), lho=dv.getUint32(p+42,true);
+    files[new TextDecoder().decode(u8.subarray(p+46,p+46+nl))]={method,csize,lho}; p+=46+nl+el+cl; }
+  const get=async nm=>{ const f=files[nm], lh=f.lho, nl=dv.getUint16(lh+26,true), el=dv.getUint16(lh+28,true); const data=u8.subarray(lh+30+nl+el,lh+30+nl+el+f.csize);
+    if(f.method===0) return new TextDecoder().decode(data);
+    const ds=new DecompressionStream('deflate-raw'); const w=ds.writable.getWriter(); w.write(data); w.close(); return new TextDecoder().decode(await new Response(ds.readable).arrayBuffer()); };
+  let root=null; if(files['META-INF/container.xml']){ const m=(await get('META-INF/container.xml')).match(/full-path="([^"]+)"/); if(m)root=m[1]; }
+  if(!root) root=Object.keys(files).find(k=>/\.(xml|musicxml)$/i.test(k)&&!/^META-INF/.test(k));
+  if(!root) throw new Error('No encontré la partitura dentro del .mxl'); return get(root);
+}
+function impParseXml(xml){
+  const doc=new DOMParser().parseFromString(xml,'application/xml');
+  if(doc.getElementsByTagName('parsererror').length) throw new Error('El archivo no es un MusicXML válido');
+  if(!doc.getElementsByTagName('score-partwise').length) throw new Error('Exporta como MusicXML "partwise" (en MuseScore: Archivo → Exportar → MusicXML sin comprimir)');
+  const parts=[...doc.getElementsByTagName('part')];
+  const chordPart=parts.find(p=>p.getElementsByTagName('harmony').length);
+  if(!chordPart) throw new Error('La partitura no trae símbolos de acorde. En MuseScore agrégalos (Añadir → Texto → Símbolo de acorde) o usa el modo texto.');
+  const txt=(t)=>{ const e=doc.getElementsByTagName(t)[0]; return e?e.textContent.trim():''; };
+  const meta={title:txt('movement-title')||txt('work-title'),composer:'',fifths:0,mode:'major',bpm:'',time:'4/4'};
+  const cr=[...doc.getElementsByTagName('creator')].find(c=>c.getAttribute('type')==='composer'); if(cr)meta.composer=cr.textContent.trim();
+  // letras (solo para pistas): primera parte que tenga letra
+  const lyricPart=parts.find(p=>p.getElementsByTagName('lyric').length); const lyr=[];
+  if(lyricPart){ [...lyricPart.getElementsByTagName('measure')].forEach((m,i)=>{ let s=''; [...m.getElementsByTagName('note')].forEach(n=>{ const l=n.getElementsByTagName('lyric')[0]; if(!l)return; const t=l.getElementsByTagName('text')[0]; if(!t)return; const sy=(l.getElementsByTagName('syllabic')[0]||{}).textContent; s+=t.textContent+((sy==='begin'||sy==='middle')?'':' '); }); lyr[i]=s.trim(); }); }
+  let div=1,beats=4,bt=4,gotKey=false,gotBpm=false,gotTime=false; const ms=[];
+  [...chordPart.getElementsByTagName('measure')].forEach((m,mi)=>{
+    let pos=0; const ch=[], marks=[]; let repF=false,repB=0,ending='';
+    [...m.children].forEach(c=>{
+      const tn=c.tagName;
+      if(tn==='attributes'){ const d=c.getElementsByTagName('divisions')[0]; if(d)div=parseInt(d.textContent)||div;
+        const t=c.getElementsByTagName('time')[0]; if(t){ beats=parseInt(t.getElementsByTagName('beats')[0].textContent)||beats; bt=parseInt(t.getElementsByTagName('beat-type')[0].textContent)||bt; if(!gotTime){meta.time=beats+'/'+bt;gotTime=true;} }
+        const k=c.getElementsByTagName('key')[0]; if(k&&!gotKey){ meta.fifths=parseInt((k.getElementsByTagName('fifths')[0]||{}).textContent)||0; meta.mode=(k.getElementsByTagName('mode')[0]||{}).textContent||'major'; gotKey=true; } }
+      else if(tn==='note'){ if(c.getElementsByTagName('chord').length||c.getElementsByTagName('grace').length)return; const d=c.getElementsByTagName('duration')[0]; if(d)pos+=parseInt(d.textContent)||0; }
+      else if(tn==='backup'){ pos-=parseInt(c.getElementsByTagName('duration')[0].textContent)||0; }
+      else if(tn==='forward'){ pos+=parseInt(c.getElementsByTagName('duration')[0].textContent)||0; }
+      else if(tn==='harmony'){ const o=c.getElementsByTagName('offset')[0]; const sym=impHarmony(c); if(sym) ch.push({p:(pos+(o?parseInt(o.textContent)||0:0))/div,c:sym}); }
+      else if(tn==='direction'){
+        [...c.getElementsByTagName('rehearsal')].forEach(r=>marks.push(r.textContent.trim()));
+        [...c.getElementsByTagName('words')].forEach(w=>{ const t=w.textContent.trim(); if(impIsSecText(t)&&t.length<30)marks.push(t); });
+        const sd=c.getElementsByTagName('sound')[0]; if(sd&&sd.getAttribute('tempo')&&!gotBpm){ meta.bpm=Math.round(parseFloat(sd.getAttribute('tempo'))); gotBpm=true; } }
+      else if(tn==='barline'){ const r=c.getElementsByTagName('repeat')[0]; if(r){ if(r.getAttribute('direction')==='forward')repF=true; else repB=parseInt(r.getAttribute('times'))||2; }
+        const en=c.getElementsByTagName('ending')[0]; if(en&&en.getAttribute('type')==='start')ending=en.getAttribute('number'); }
+    });
+    const len=beats*4/bt; const implicit=m.getAttribute('implicit')==='yes';
+    const sorted=ch.sort((a,b)=>a.p-b.p).filter((x,i,a)=>!i||x.p!==a[i-1].p);
+    if(implicit&&!sorted.length) return;
+    ms.push({idx:mi,len,chords:sorted,marks,repF,repB,ending,cue:lyr[mi]||''});
+  });
+  // medidas → [ [acorde, tiempos], … ] (acorde ausente = continúa el anterior)
+  let prev='';
+  ms.forEach(m=>{ const out=[]; const cs=m.chords.filter(x=>x.p<m.len);
+    if(!cs.length) out.push([prev,Math.round(m.len)]);
+    else { if(cs[0].p>0.01) out.push([prev,Math.max(1,Math.round(cs[0].p))]);
+      cs.forEach((x,i)=>{ const end=i+1<cs.length?cs[i+1].p:m.len; out.push([x.c,Math.max(1,Math.round(end-x.p))]); }); prev=cs[cs.length-1].c; }
+    // ajustar suma al largo del compás
+    let tot=out.reduce((s,x)=>s+x[1],0), L=Math.round(m.len); while(tot>L&&out.length>1){ const j=out.findIndex(x=>x[1]>1); if(j<0)break; out[j][1]--; tot--; } if(tot<L) out[out.length-1][1]+=L-tot;
+    m.bars=out; });
+  return {meta,blocks:impBlocksFromMeasures(ms),notes:ms.some(m=>m.ending)?['Hay casillas de repetición (1ª/2ª): revisa esos compases.']:[]};
+}
+function impBlocksFromMeasures(ms){
+  const hasMarks=ms.some(m=>m.marks.length); const blocks=[]; let cur=null;
+  ms.forEach((m,i)=>{
+    const mk=m.marks[0];
+    if(!cur || (hasMarks&&mk) || (!hasMarks&&cur.bars.length>=8)){
+      cur={name:hasMarks?(mk?impSecName(mk):'INTRO'):'SECCIÓN '+(blocks.length+1),bars:[],cues:[],rep:0,lyr:false}; blocks.push(cur); }
+    if(m.repF&&cur.bars.length===0) cur._rf=true;
+    cur.bars.push(m.bars); cur.cues.push(m.cue);
+    if(m.repB&&cur._rf) cur.rep=m.repB;
+  });
+  blocks.forEach(b=>delete b._rf); return blocks;
+}
+
+// ── Texto con compases ──
+function impDistribute(n){ return ({1:[4],2:[2,2],3:[2,1,1],4:[1,1,1,1]})[n]||[4]; }
+function impParseText(txt){
+  const meta={title:'',composer:'',fifths:null,mode:'major',bpm:'',time:'4/4',tono:''}; const blocks=[]; let cur=null, form=null; const warn=[];
+  const chordOk=t=>/^[A-G][#b♯♭]?[^\s|]*$/.test(t)||t==='%'||/^N\.?C\.?$/i.test(t);
+  txt.split(/\r?\n/).forEach(raw=>{
+    const line=raw.trim(); if(!line||/^#/.test(line))return;
+    let m;
+    if((m=line.match(/^(tono|tonalidad|key)\s*:\s*(.+)$/i))){ meta.tono=m[2].trim(); return; }
+    if((m=line.match(/^bpm\s*:\s*(\d+)/i))){ meta.bpm=parseInt(m[1]); return; }
+    if((m=line.match(/^(comp[aá]s|time)\s*:\s*(\d+\/\d+)/i))){ meta.time=m[2]; return; }
+    if((m=line.match(/^(forma|form)\s*:\s*(.+)$/i))){ form=m[2].split(/[,>→]+/).map(x=>x.trim()).filter(Boolean); return; }
+    const hd=line.match(/^\[?\s*([^|:\[\]]+?)\s*(?:[x×]\s*(\d+))?\s*\]?\s*:?\s*(\|.*)?$/i);
+    if(hd&&!/^[|]/.test(line)){
+      const nm=hd[1].trim(); const bars=hd[3]; const isHead=!bars?(!/\|/.test(line)):true;
+      if(isHead){ cur={name:impSecName(nm),bars:[],cues:[],rep:hd[2]?parseInt(hd[2]):0}; blocks.push(cur); if(bars) impBarsInto(cur,bars,chordOk,warn); return; } }
+    if(/\|/.test(line)){ if(!cur){ cur={name:'SECCIÓN 1',bars:[],cues:[],rep:0}; blocks.push(cur); } impBarsInto(cur,line,chordOk,warn); }
+  });
+  blocks.forEach(b=>{ b.cues=b.bars.map(()=>''); });
+  return {meta,blocks,form,notes:warn};
+}
+function impBarsInto(sec,s,chordOk,warn){
+  s.split('|').map(x=>x.trim()).filter(Boolean).forEach(bar=>{
+    const toks=bar.split(/\s+/);
+    if(toks.length===1&&toks[0]==='%'){ const last=sec.bars[sec.bars.length-1]; sec.bars.push(last?JSON.parse(JSON.stringify(last)):[['',4]]); return; }
+    toks.forEach(t=>{ if(!chordOk(t)) warn.push('Acorde no reconocido: «'+t+'»'); });
+    const d=impDistribute(Math.min(toks.length,4)); sec.bars.push(toks.slice(0,4).map((t,i)=>[/^N\.?C\.?$/i.test(t)?'N.C.':t,d[i]]));
+  });
+}
+
+// ── Bloques → modelo del lead sheet de la app ──
+function impBuild(res,semi,flats){
+  const tr=bars=>bars.map(b=>b.map(([c,t])=>[impTranspose(c,semi,flats),t]));
+  const uniq=[], seq=[]; const L='ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  res.blocks.forEach(b=>{
+    const bars=tr(b.bars); const sig=b.name+'|'+JSON.stringify(bars)+'|'+b.rep;
+    let u=uniq.find(x=>x.sig===sig); if(!u){ u={sig,label:L[uniq.length]||'X',name:b.name,bars,cues:b.cues,rep:b.rep}; uniq.push(u); }
+    seq.push(u);
+  });
+  const sections=uniq.map((u,ui)=>{
+    const rows=[],lyrics=[]; for(let i=0;i<u.bars.length;i+=4){ rows.push(u.bars.slice(i,i+4)); const w=u.cues.slice(i,i+4).join(' ').replace(/\s+/g,' ').trim().split(' ').filter(Boolean); lyrics.push(w.length?w.slice(0,6).join(' ')+(w.length>6?'…':''):''); }
+    const sec={label:u.label,name:u.name,repeat:!!u.rep,last:ui===uniq.length-1,note:u.rep?'×'+u.rep:'',desc:'',rows};
+    if(lyrics.some(Boolean)) sec.lyrics=lyrics; return sec; });
+  const form=(res.form&&res.form.length)?res.form.map(f=>{ const m=f.match(/^(.+?)\s*[x×]\s*(\d+)$/i); const nm=impSecName(m?m[1]:f); const u=uniq.find(x=>x.name===nm); return nm+(u?'('+u.label+')':'')+(m?' ×'+m[2]:''); }).join(' → ')
+    : seq.map((u,i)=>u.name+'('+u.label+')'+(u.rep?' ×'+u.rep:'')).join(' → ');
+  return {sections,form};
+}
+
+// ── Interfaz ──
+function lsOpenImport(){
+  if(!lsSong) return;
+  document.querySelector('.imp-md')?.remove();
+  const cans=DB.get('canciones'); const c=cans.find(x=>x.id===lsSong._cancionId);
+  const repKey=(c&&c.tonalidad&&c.tonalidad!=='?')?c.tonalidad.trim():'';
+  const md=document.createElement('div'); md.className='imp-md';
+  md.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:100000;display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:20px;font-family:sans-serif;';
+  md.innerHTML=`<div style="background:#22262e;color:#e8eaee;border-radius:12px;padding:22px;width:680px;max-width:100%;">
+    <h3 style="font-size:16px;margin:0 0 4px">Importar acordes${c?' — '+c.titulo.replace(/</g,'&lt;'):''}</h3>
+    <p style="font-size:12.5px;color:#9aa3b2;margin:0 0 14px">Reemplaza las secciones de esta hoja. No se guarda hasta que pulses 💾 Guardar.</p>
+    <label style="font-size:12.5px;font-weight:600">1) Archivo de MuseScore (MusicXML)</label>
+    <input type="file" id="imp-file" accept=".musicxml,.xml,.mxl" style="display:block;width:100%;margin:6px 0 4px;color:#cbd2de">
+    <div style="font-size:11.5px;color:#8a93a3;margin-bottom:12px">En MuseScore: Archivo → Exportar → MusicXML (.musicxml o .mxl). Debe tener símbolos de acorde.</div>
+    <label style="font-size:12.5px;font-weight:600">… o pega los compases como texto</label>
+    <textarea id="imp-text" placeholder="Tono: D&#10;INTRO: | Bm | D | Em | F#m |&#10;VERSO x2: | D | Bm | Em | F#m Bm |&#10;CORO: | D/F# G | A Bm | G Bm | A |&#10;Forma: INTRO, VERSO, CORO, VERSO, CORO" style="width:100%;height:120px;margin-top:6px;padding:9px;border-radius:8px;border:1px solid #3a4150;background:#171a20;color:#e8eaee;font-family:monospace;font-size:12.5px"></textarea>
+    <div style="display:flex;gap:10px;align-items:center;margin:12px 0;flex-wrap:wrap">
+      <label style="font-size:12.5px;font-weight:600">2) Tonalidad en la hoja:</label>
+      <select id="imp-tr" style="padding:7px;border-radius:7px;border:1px solid #3a4150;background:#171a20;color:#e8eaee">
+        <option value="orig">Tal como viene</option>${repKey?`<option value="rep" selected>La del repertorio (${repKey})</option>`:''}
+        ${['C','Db','D','Eb','E','F','F#','G','Ab','A','Bb','B'].map(k=>`<option value="${k}">${k}</option>`).join('')}
+      </select>
+      <button id="imp-go" style="padding:8px 16px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-weight:600">Analizar</button>
+    </div>
+    <div id="imp-out" style="font-size:12.5px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+      <button id="imp-cancel" style="padding:8px 14px;border-radius:8px;border:1px solid #3a4150;background:transparent;color:#cbd2de;cursor:pointer">Cancelar</button>
+      <button id="imp-apply" disabled style="padding:8px 16px;border:none;border-radius:8px;background:#16a34a;color:#fff;cursor:pointer;font-weight:600;opacity:.45">Aplicar a la hoja</button>
+    </div></div>`;
+  document.body.appendChild(md); IMP.res=null; IMP.repKey=repKey;
+  md.querySelector('#imp-cancel').onclick=()=>md.remove();
+  md.querySelector('#imp-go').onclick=()=>impAnalyze(md);
+  md.querySelector('#imp-tr').onchange=()=>{ if(IMP.res) impPreview(md); };
+  md.querySelector('#imp-apply').onclick=()=>impApply(md);
+}
+async function impAnalyze(md){
+  const out=md.querySelector('#imp-out'); out.innerHTML=''; IMP.res=null; md.querySelector('#imp-apply').disabled=true; md.querySelector('#imp-apply').style.opacity=.45;
+  try{
+    const f=md.querySelector('#imp-file').files[0], t=md.querySelector('#imp-text').value.trim(); let res;
+    if(f){ const nm=f.name.toLowerCase(); const xml=nm.endsWith('.mxl')?await impUnzip(await f.arrayBuffer()):await f.text(); res=impParseXml(xml); res.kind='xml'; }
+    else if(t){ res=impParseText(t); res.kind='txt'; if(!res.blocks.length) throw new Error('No encontré compases. Usa el formato: SECCIÓN: | G | D | Em | C |'); }
+    else throw new Error('Elige un archivo o pega los compases.');
+    IMP.res=res; impPreview(md);
+  }catch(e){ out.innerHTML='<div style="color:#fca5a5">⚠️ '+String(e.message||e).replace(/</g,'&lt;')+'</div>'; }
+}
+function impTargetShift(){
+  const md=document.querySelector('.imp-md'); const v=md.querySelector('#imp-tr').value; const m=IMP.res.meta;
+  let srcPc,minor;
+  if(IMP.res.kind==='xml'){ const k=impKeyName(m.fifths,m.mode); srcPc=k.pc; minor=k.minor; }
+  else if(m.tono){ const mm=m.tono.match(/^([A-G][#b]?)(m|menor|min)?/i); if(mm){ srcPc=impPc(mm[1][0].toUpperCase()+mm[1].slice(1)); minor=!!mm[2]; } }
+  let target=null; if(v==='rep'&&IMP.repKey){ const mm=IMP.repKey.match(/^([A-G][#b]?)(m)?/); if(mm){ const tm=!!mm[2]; target=impPc(mm[1]); if(minor===undefined)minor=tm; else if(minor!==tm) target=minor?(target+9)%12:(target+3)%12; } } else if(v!=='orig'&&v!=='rep'){ target=impPc(v); }
+  if(srcPc===undefined||target===null) return {semi:0,flats:srcPc===undefined?false:impPreferFlats(srcPc,minor),src:srcPc,minor,tgt:srcPc};
+  const semi=(((target-srcPc+6)%12)+12)%12-6; return {semi,flats:impPreferFlats(target,minor),src:srcPc,minor,tgt:target};
+}
+function impPreview(md){
+  const res=IMP.res, out=md.querySelector('#imp-out'), sh=impTargetShift(); const b=impBuild(res,sh.semi,sh.flats);
+  const nm=pc=>pc===undefined?'?':(sh.flats?IMP_FL:IMP_SH)[pc]+(sh.minor?'m':'');
+  const total=res.blocks.reduce((s,x)=>s+x.bars.length,0);
+  let h=`<div style="padding:10px 12px;background:#171a20;border-radius:8px;margin-bottom:10px;line-height:1.7">`
+   +`<b>${(res.meta.title||'').replace(/</g,'&lt;')||'(sin título)'}</b> · Tono de origen: <b>${nm(sh.src)}</b>${sh.semi?` → se transpone a <b>${nm(sh.tgt)}</b> (${sh.semi>0?'+':''}${sh.semi})`:''} · ${res.meta.time} · ${res.meta.bpm?res.meta.bpm+' BPM':'sin BPM'}<br>`
+   +`<span style="color:#9aa3b2">Forma:</span> ${b.form.replace(/</g,'&lt;')}<br><span style="color:#9aa3b2">${b.sections.length} secciones únicas · ${total} compases en total</span></div>`;
+  h+=b.sections.map(s=>`<div style="margin-bottom:8px"><div style="font-weight:700;color:#93c5fd">${s.label} · ${s.name}${s.note?' '+s.note:''} <span style="font-weight:400;color:#8a93a3">(${s.rows.reduce((a,r)=>a+r.length,0)} compases)</span></div>`
+    +s.rows.map(r=>`<div style="font-family:monospace;font-size:12px;color:#d6dbe5">| ${r.map(bar=>bar.map(([c,t])=>(c||'—')+(t<4&&bar.length>1?'':'')).join(' ')).join(' | ')} |</div>`).join('')+'</div>').join('');
+  if(res.notes&&res.notes.length) h+='<div style="color:#fcd34d;margin-top:6px">'+res.notes.map(n=>'⚠️ '+n.replace(/</g,'&lt;')).join('<br>')+'</div>';
+  if(res.kind==='xml'&&!res.blocks.some(x=>/^(VERSO|CORO|PUENTE|INTRO|FINAL|INTERLUDIO|PRE-CORO|TAG)/.test(x.name))) h+='<div style="color:#fcd34d;margin-top:6px">⚠️ La partitura no trae marcas de sección: la dividí cada 8 compases. Renombra las secciones en el editor.</div>';
+  h+='<div style="color:#9aa3b2;margin-top:8px">Revisa que la forma y los compases coincidan con tu partitura antes de aplicar.</div>';
+  out.innerHTML=h; const ap=md.querySelector('#imp-apply'); ap.disabled=false; ap.style.opacity=1; IMP.built=b; IMP.sh=sh;
+}
+function impApply(md){
+  if(!IMP.res||!IMP.built) return; const r=IMP.res,b=IMP.built,sh=IMP.sh;
+  if(lsSong.sections&&lsSong.sections.length&&!confirm('Esto reemplaza las secciones actuales de este lead sheet. ¿Continuar? (No se guarda hasta que pulses Guardar.)')) return;
+  const kn=(pc,minor)=>pc===undefined?'':(sh.flats?IMP_FL:IMP_SH)[pc]+(minor?'m':'');
+  const tonic=kn(sh.tgt!==undefined?sh.tgt:sh.src,sh.minor);
+  lsSong.sections=b.sections; lsSong.form=b.form;
+  if(r.meta.time) lsSong.time=r.meta.time;
+  if(r.meta.bpm) lsSong.bpm=r.meta.bpm;
+  if(tonic){ lsSong.key=tonic.replace(/m$/,'')+(sh.minor?' menor':' Mayor'); lsSong.originalKey=tonic; }
+  if(!lsSong.title&&r.meta.title) lsSong.title=r.meta.title;
+  if(!lsSong.composer&&r.meta.composer) lsSong.composer=r.meta.composer;
+  md.remove(); if(!lsEditMode) lsToggleEdit(); lsRender();
+  showToast('Acordes importados. Revisa y pulsa 💾 Guardar','info');
+}
+</script>
 </body>
 </html>
