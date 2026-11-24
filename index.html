@@ -306,7 +306,7 @@ body.ed .ed-only{display:flex!important}
 body.ro [onclick*="delete" i],body.ro [onclick*="edit" i]:not(#cloud-btn),body.ro [onclick*="openAddModal"],
 body.ro [onclick*="save" i],body.ro [onclick*="slAdd"],body.ro [onclick*="slRemove"],body.ro [onclick*="ensRemove"],
 body.ro [onclick*="send" i],body.ro [onclick*="notificar"],body.ro [onclick*="whatsappSetlist"],
-body.ro [onclick*="useSetlistInCalendar"],body.ro [onclick*="lsOpenAddSec"],body.ro [onclick*="lsRmSlot"],
+body.ro [onclick*="slDuplicate"],body.ro [onclick*="useSetlistInCalendar"],body.ro [onclick*="lsOpenAddSec"],body.ro [onclick*="lsRmSlot"],
 body.ro [onclick*="lsAddSlot"],body.ro [onclick*="'notificaciones'"],body.ro .no-ro,body.ro #sidebar-import{display:none!important}
 </style>
 <style>.sl-ta{width:100%;padding:9px 11px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:12.5px;line-height:1.5;resize:vertical}
@@ -1735,6 +1735,7 @@ function renderSetlists(){
       <div class="setlist-footer">
         <button class="action-btn" onclick="verPrograma('${sl.id}')" style="background:rgba(77,124,255,.15);color:#7da0ff;border:1px solid rgba(77,124,255,.3)">📋 Programa</button>
         <button class="action-btn action-edit" onclick="editSetlist('${sl.id}')"><i class="fa fa-edit"></i> Editar</button>
+        <button class="action-btn" onclick="slDuplicate('${sl.id}')" title="Crear un set list nuevo a partir de este" style="background:rgba(160,160,160,.12);border:1px solid rgba(160,160,160,.3)"><i class="fa fa-copy"></i> Duplicar</button>
         <button class="action-btn action-green" onclick="useSetlistInCalendar('${sl.id}')"><i class="fa fa-calendar-plus"></i> Calendario</button>
         <button class="action-btn" onclick="whatsappSetlist('${sl.id}')" style="background:rgba(37,211,102,0.15);color:#25D366;border:1px solid rgba(37,211,102,0.3);">📱 WhatsApp</button>
         <button class="action-btn action-delete" onclick="deleteSetlist('${sl.id}')" style="margin-left:auto"><i class="fa fa-trash"></i></button>
@@ -1769,6 +1770,15 @@ function openModalSetlist(id){
   openModal('modal-setlist');
 }
 function editSetlist(id){openModalSetlist(id);}
+function slDuplicate(id){
+  /* Abre una copia como set list NUEVO. No escribe nada hasta pulsar Guardar; el original no se toca. */
+  if(!DB.get('setlists').find(x=>x.id===id))return;
+  openModalSetlist(id);
+  document.getElementById('sl-edit-id').value='';
+  document.getElementById('modal-setlist-title').textContent='Duplicar Set List — elige la nueva fecha';
+  document.getElementById('sl-fecha').value='';
+  showToast('Copia lista: elige la fecha, ajusta lo que cambie y guarda','info');
+}
 
 function filterSlSongs(){renderSlSongsList();}
 function renderSlSongsList(){
