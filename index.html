@@ -4501,7 +4501,7 @@ function lsOpenImport(){
     <div style="display:flex;gap:10px;align-items:center;margin:12px 0;flex-wrap:wrap">
       <label style="font-size:12.5px;font-weight:600">2) Tonalidad en la hoja:</label>
       <select id="imp-tr" style="padding:7px;border-radius:7px;border:1px solid #3a4150;background:#171a20;color:#e8eaee">
-        <option value="orig">Tal como viene</option>${repKey?`<option value="rep" selected>La del repertorio (${repKey})</option>`:''}
+        <option value="orig">Tal como viene</option>${repKey?`<option value="rep">Transponer a la del repertorio (${repKey})</option>`:''}
         ${['C','Db','D','Eb','E','F','F#','G','Ab','A','Bb','B'].map(k=>`<option value="${k}">${k}</option>`).join('')}
       </select>
       <button id="imp-go" style="padding:8px 16px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-weight:600">Analizar</button>
