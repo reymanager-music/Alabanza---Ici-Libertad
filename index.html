@@ -4017,6 +4017,13 @@ lyrics:["Santo, Santo, Señor…","…digno de toda alabanza"]},
 rows:[[[["Am",4]],[["C",4]],[["G",4]],[["D",4]]],[[["Am",4]],[["C",4]],[["G",4]],[["D",4]]]]}]}
 };
 
+// ══ CORRECCIÓN DE IDs ═══════════════════════════════════════════════════
+// Las hojas de arriba se numeraron con un catálogo antiguo: 'c1' (Hosanna) coincidía hoy con "Todo lo haces bien", etc.
+// Solo Hosanna y Poderoso están verificadas: se reasignan a su canción real. Los borradores sin verificar
+// (acordes genéricos marcados ⚠️) se apartan en LS_BORRADORES para no mostrar acordes equivocados a los músicos.
+const LS_BORRADORES = Object.assign({}, LS);
+(function(){ const real={c28:'c1', c23:'c9'}; Object.keys(LS).forEach(k=>delete LS[k]); Object.keys(real).forEach(id=>{ LS[id]=LS_BORRADORES[real[id]]; }); })();
+
 // ══ LEAD SHEET ENGINE ════════════════════════════════════════════════════
 let lsSong=null, lsEditMode=false, lsMSRC=null, lsMWork=[];
 
