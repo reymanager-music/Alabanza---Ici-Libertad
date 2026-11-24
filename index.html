@@ -4429,6 +4429,32 @@ function impBarsInto(sec,s,chordOk,warn){
   });
 }
 
+// ── Cifrado (acordes sobre la letra: Cifra Club, Ultimate Guitar, LaCuerda…) ──
+const IMP_CHORD=/^[A-G](#|b)?(m|M|maj|min|dim|aug|sus|add|\+|°|ø)?[0-9]*((sus|add|maj|M)?[0-9]+|b[0-9]+|#[0-9]+|\([^)]*\))*(\/[A-G](#|b)?)?$/;
+function impChordTok(t){ return IMP_CHORD.test(t)||/^N\.?C\.?$/i.test(t); }
+function impIsBarText(t){ return t.split(/\r?\n/).some(l=>/^\s*(\[?[^|:\[\]]+\]?\s*([x×]\s*\d+)?\s*:\s*)?\|.+\|\s*$/.test(l)); }
+function impParseChart(txt){
+  const meta={title:'',composer:'',fifths:null,mode:'major',bpm:'',time:'4/4',tono:''}; const blocks=[]; let cur=null;
+  const lines=txt.split(/\r?\n/).map(l=>l.replace(/\t/g,'    ').trim());
+  const isChordLine=l=>{ const tk=l.split(/\s+/).filter(t=>t&&!/^[-|/–—·.:]+$/.test(t)&&!/^\(?[x×]\d+\)?$/i.test(t)); return tk.length>0&&tk.every(impChordTok); };
+  const header=l=>{ let m=l.match(/^[\[\(]\s*([^\]\)]+?)\s*[\]\)]\s*(?:[x×]\s*(\d+))?\s*:?\s*$/); if(m&&impIsSecText(m[1])) return m;
+    if(impIsSecText(l)&&l.length<28&&!isChordLine(l)){ m=l.match(/^([^:]+?)\s*:?\s*(?:[x×]\s*(\d+))?\s*$/); if(m) return m; } return null; };
+  for(let i=0;i<lines.length;i++){
+    const line=lines[i]; if(!line) continue; let m;
+    if((m=line.match(/^(tono|tonalidad|key|tom)\s*:\s*([A-G][#b]?m?)\b/i))){ meta.tono=m[2]; continue; }
+    if((m=line.match(/^bpm\s*:\s*(\d+)/i))){ meta.bpm=parseInt(m[1]); continue; }
+    const h=header(line); if(h){ cur={name:impSecName(h[1]),bars:[],cues:[],rep:h[2]?parseInt(h[2]):0}; blocks.push(cur); continue; }
+    if(isChordLine(line)){
+      if(!cur){ cur={name:'SECCIÓN 1',bars:[],cues:[],rep:0}; blocks.push(cur); }
+      let cue=''; for(let j=i+1;j<lines.length;j++){ if(!lines[j]) continue; if(isChordLine(lines[j])||header(lines[j])) break; cue=lines[j]; break; }
+      line.split(/\s+/).filter(t=>t&&!/^[-|/–—·.:]+$/.test(t)&&!/^\(?[x×]\d+\)?$/i.test(t)).forEach((t,k)=>{ cur.bars.push([[/^N\.?C\.?$/i.test(t)?'N.C.':t,4]]); cur.cues.push(k===0?cue:''); });
+    }
+  }
+  const good=blocks.filter(b=>b.bars.length);
+  if(!meta.tono&&good.length){ const f=good[0].bars[0][0][0]; const mm=f.match(/^([A-G][#b]?)(m(?!aj))?/); if(mm){ meta.tono=mm[1]+(mm[2]||''); meta.tonoEst=true; } }
+  return {meta,blocks:good,form:null,estimated:true,notes:[]};
+}
+
 // ── Bloques → modelo del lead sheet de la app ──
 function impBuild(res,semi,flats){
   const tr=bars=>bars.map(b=>b.map(([c,t])=>[impTranspose(c,semi,flats),t]));
@@ -4440,7 +4466,7 @@ function impBuild(res,semi,flats){
   });
   const sections=uniq.map((u,ui)=>{
     const rows=[],lyrics=[]; for(let i=0;i<u.bars.length;i+=4){ rows.push(u.bars.slice(i,i+4)); const w=u.cues.slice(i,i+4).join(' ').replace(/\s+/g,' ').trim().split(' ').filter(Boolean); lyrics.push(w.length?w.slice(0,6).join(' ')+(w.length>6?'…':''):''); }
-    const sec={label:u.label,name:u.name,repeat:!!u.rep,last:ui===uniq.length-1,note:u.rep?'×'+u.rep:'',desc:'',rows};
+    const sec={label:u.label,name:u.name,repeat:!!u.rep,last:ui===uniq.length-1,note:u.rep?'×'+u.rep:'',desc:res.estimated?'⚠️ Compases estimados (1 acorde = 1 compás): verificar con la grabación':'',rows};
     if(lyrics.some(Boolean)) sec.lyrics=lyrics; return sec; });
   const form=(res.form&&res.form.length)?res.form.map(f=>{ const m=f.match(/^(.+?)\s*[x×]\s*(\d+)$/i); const nm=impSecName(m?m[1]:f); const u=uniq.find(x=>x.name===nm); return nm+(u?'('+u.label+')':'')+(m?' ×'+m[2]:''); }).join(' → ')
     : seq.map((u,i)=>u.name+'('+u.label+')'+(u.rep?' ×'+u.rep:'')).join(' → ');
@@ -4461,7 +4487,7 @@ function lsOpenImport(){
     <label style="font-size:12.5px;font-weight:600">1) Archivo de MuseScore (MusicXML)</label>
     <input type="file" id="imp-file" accept=".musicxml,.xml,.mxl" style="display:block;width:100%;margin:6px 0 4px;color:#cbd2de">
     <div style="font-size:11.5px;color:#8a93a3;margin-bottom:12px">En MuseScore: Archivo → Exportar → MusicXML (.musicxml o .mxl). Debe tener símbolos de acorde.</div>
-    <label style="font-size:12.5px;font-weight:600">… o pega los compases como texto</label>
+    <label style="font-size:12.5px;font-weight:600">… o pega un cifrado (acordes sobre la letra) o compases</label>
     <textarea id="imp-text" placeholder="Tono: D&#10;INTRO: | Bm | D | Em | F#m |&#10;VERSO x2: | D | Bm | Em | F#m Bm |&#10;CORO: | D/F# G | A Bm | G Bm | A |&#10;Forma: INTRO, VERSO, CORO, VERSO, CORO" style="width:100%;height:120px;margin-top:6px;padding:9px;border-radius:8px;border:1px solid #3a4150;background:#171a20;color:#e8eaee;font-family:monospace;font-size:12.5px"></textarea>
     <div style="display:flex;gap:10px;align-items:center;margin:12px 0;flex-wrap:wrap">
       <label style="font-size:12.5px;font-weight:600">2) Tonalidad en la hoja:</label>
@@ -4487,7 +4513,7 @@ async function impAnalyze(md){
   try{
     const f=md.querySelector('#imp-file').files[0], t=md.querySelector('#imp-text').value.trim(); let res;
     if(f){ const nm=f.name.toLowerCase(); const xml=nm.endsWith('.mxl')?await impUnzip(await f.arrayBuffer()):await f.text(); res=impParseXml(xml); res.kind='xml'; }
-    else if(t){ res=impParseText(t); res.kind='txt'; if(!res.blocks.length) throw new Error('No encontré compases. Usa el formato: SECCIÓN: | G | D | Em | C |'); }
+    else if(t){ res=impIsBarText(t)?impParseText(t):impParseChart(t); res.kind='txt'; if(!res.blocks.length) throw new Error('No encontré acordes. Pega un cifrado (acordes sobre la letra) o compases como: SECCIÓN: | G | D | Em | C |'); }
     else throw new Error('Elige un archivo o pega los compases.');
     IMP.res=res; impPreview(md);
   }catch(e){ out.innerHTML='<div style="color:#fca5a5">⚠️ '+String(e.message||e).replace(/</g,'&lt;')+'</div>'; }
@@ -4510,6 +4536,7 @@ function impPreview(md){
    +`<span style="color:#9aa3b2">Forma:</span> ${b.form.replace(/</g,'&lt;')}<br><span style="color:#9aa3b2">${b.sections.length} secciones únicas · ${total} compases en total</span></div>`;
   h+=b.sections.map(s=>`<div style="margin-bottom:8px"><div style="font-weight:700;color:#93c5fd">${s.label} · ${s.name}${s.note?' '+s.note:''} <span style="font-weight:400;color:#8a93a3">(${s.rows.reduce((a,r)=>a+r.length,0)} compases)</span></div>`
     +s.rows.map(r=>`<div style="font-family:monospace;font-size:12px;color:#d6dbe5">| ${r.map(bar=>bar.map(([c,t])=>(c||'—')+(t<4&&bar.length>1?'':'')).join(' ')).join(' | ')} |</div>`).join('')+'</div>').join('');
+  if(res.estimated) h+='<div style="color:#fcd34d;margin-top:6px">⚠️ Un cifrado no trae la duración de los acordes: asumí 1 acorde = 1 compás. La <b>forma</b> sigue el orden del cifrado. Ajusta compases y forma según la versión que toca el equipo.'+(res.meta.tonoEst?' El tono es una estimación por el primer acorde.':'')+'</div>';
   if(res.notes&&res.notes.length) h+='<div style="color:#fcd34d;margin-top:6px">'+res.notes.map(n=>'⚠️ '+n.replace(/</g,'&lt;')).join('<br>')+'</div>';
   if(res.kind==='xml'&&!res.blocks.some(x=>/^(VERSO|CORO|PUENTE|INTRO|FINAL|INTERLUDIO|PRE-CORO|TAG)/.test(x.name))) h+='<div style="color:#fcd34d;margin-top:6px">⚠️ La partitura no trae marcas de sección: la dividí cada 8 compases. Renombra las secciones en el editor.</div>';
   h+='<div style="color:#9aa3b2;margin-top:8px">Revisa que la forma y los compases coincidan con tu partitura antes de aplicar.</div>';
