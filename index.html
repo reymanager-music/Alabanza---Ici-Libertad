@@ -388,6 +388,19 @@ body{font-family:var(--ui);-webkit-font-smoothing:antialiased}
 .crew:last-child{border-bottom:none}.crew-role{color:var(--text3)}.crew-name{font-weight:600;text-align:right}
 .rules{list-style:none;font-size:13.5px;line-height:1.5;color:var(--text2)}
 .rules li{padding:6px 0 6px 14px;position:relative}.rules li::before{content:"";position:absolute;left:0;top:13px;width:6px;height:6px;border-radius:50%;background:var(--accent3)}
+.asis-me{font-weight:600;font-size:15px;margin:2px 0 10px}
+.asis select{width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font:inherit;font-size:14px}
+.asis-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.asis-b{padding:11px 8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text2);font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.asis-b.si.on{background:#16a34a;border-color:#16a34a;color:#fff}.asis-b.no.on{background:#dc2626;border-color:#dc2626;color:#fff}
+.asis-b:hover{border-color:var(--text3)}
+.asis-bar{display:flex;gap:16px;margin:0 0 12px;font-size:13px;color:var(--text3)}.asis-bar b{font-size:20px;color:var(--text);display:block;line-height:1.1}
+.asis-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.asis-chip{padding:5px 10px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--text2);font:inherit;font-size:12.5px;cursor:pointer}
+.asis-chip.si{border-color:#16a34a;color:#4ade80}.asis-chip.no{border-color:#dc2626;color:#f87171}.asis-chip.na{border-style:dashed}
+.pend-row{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--border);font-size:13.5px;cursor:pointer}
+.pend-row:last-child{border-bottom:none}.pend-row i{color:var(--text3);margin-top:3px;width:14px}.pend-row small{display:block;color:var(--text3);font-size:12px;margin-top:2px}
+.sheet-empty .acts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px}
 .linklike{background:none;border:none;color:var(--accent3);font:inherit;font-size:13px;cursor:pointer;padding:6px 0 0}
 .later{margin-top:28px}
 .later-row{display:grid;grid-template-columns:76px 1fr auto;gap:14px;align-items:center;padding:14px 4px;border-bottom:1px solid var(--border);cursor:pointer}
@@ -883,6 +896,8 @@ body{font-family:var(--ui);-webkit-font-smoothing:antialiased}
 // ======================== DB ========================
 const CFG = window.CLOUD_CONFIG || {};
 const CLOUD = { on: !!(CFG.firebase && CFG.firebase.apiKey && typeof firebase!=='undefined'), editor:false, db:null, auth:null, user:null, first:true };
+const ASIS = {}; let ASIS_OK = null;   // asistencia (colección aparte)
+let slAssignDate = null;
 const MEM = {};   // modo nube: copia en memoria (NO toca el localStorage local -> tus datos locales quedan intactos)
 const DB = {
   _r(fk){ return CLOUD.on ? (MEM[fk]===undefined?null:MEM[fk]) : localStorage.getItem(fk); },
@@ -978,6 +993,13 @@ function cloudStart(){
       clearTimeout(t); t=setTimeout(cloudRefresh,400);
     }
   }, err=>{ cloudChip('Error de conexión','off'); showToast('Nube: '+err.message,'error'); });
+  // Asistencia: colección independiente. Si las reglas aún no la permiten, la función queda oculta sin afectar nada más.
+  let ta=null;
+  CLOUD.db.collection('asistencia').onSnapshot(snap=>{
+    ASIS_OK=true;
+    snap.docChanges().forEach(ch=>{ if(ch.type==='removed') delete ASIS[ch.doc.id]; else ASIS[ch.doc.id]=ch.doc.data(); });
+    clearTimeout(ta); ta=setTimeout(()=>{ if(!CLOUD.first && document.getElementById('home') && currentModule==='dashboard' && !document.getElementById('asis-who')) renderDashboard(); },350);
+  }, err=>{ if(err&&err.code==='permission-denied'){ ASIS_OK=false; } });
 }
 
 // ======================== SEED ========================
@@ -1432,6 +1454,81 @@ function svcStart(key,sl){
   return {date:d,time:t.length<5?'0'+t:t};
 }
 function cdParts(target){const diff=target-new Date(); if(diff<=0)return null; const m=Math.floor(diff/60000); return {d:Math.floor(m/1440),h:Math.floor(m%1440/60),m:m%60};}
+function asisKey(f,i){return f+'__'+i;}
+function asisMe(){try{return localStorage.getItem('ici_me')||'';}catch{return '';}}
+function asisWho(id){try{ if(id)localStorage.setItem('ici_me',id); else localStorage.removeItem('ici_me'); }catch{} renderDashboard();}
+function asisResp(f,i,st){
+  const k=asisKey(f,i); const prev=ASIS[k]; ASIS[k]={f,i,s:st}; renderDashboard();
+  CLOUD.db.collection('asistencia').doc(k).set({f,i,s:st,t:firebase.firestore.FieldValue.serverTimestamp()})
+    .then(()=>showToast(st==='si'?'¡Confirmado! Gracias':'Anotado. Gracias por avisar'))
+    .catch(e=>{ if(prev)ASIS[k]=prev; else delete ASIS[k]; renderDashboard(); showToast('No se pudo registrar: '+e.message,'error'); });
+}
+function asisCycle(f,i){
+  if(!CLOUD.editor)return; const k=asisKey(f,i), cur=(ASIS[k]||{}).s||'';
+  const col=CLOUD.db.collection('asistencia').doc(k);
+  if(cur==='no'){ delete ASIS[k]; renderDashboard(); col.delete().catch(e=>showToast('No se pudo quitar: '+e.message,'error')); return; }
+  const nx=cur==='si'?'no':'si'; ASIS[k]={f,i,s:nx}; renderDashboard();
+  col.set({f,i,s:nx,t:firebase.firestore.FieldValue.serverTimestamp()}).catch(e=>showToast('No se pudo guardar: '+e.message,'error'));
+}
+function asisRemind(f){
+  const ints=DB.get('integrantes').filter(i=>(i.estado||'Activo')==='Activo' && !(ASIS[asisKey(f,i.id)]||{}).s);
+  if(!ints.length)return;
+  const fecha=fechaLarga(new Date(f+'T00:00:00')).toLowerCase();
+  const msg='Equipo, falta confirmar asistencia para el '+fecha+':\n'+ints.map(i=>'• '+i.nombre).join('\n')+'\n\nEntren a '+location.origin+' y respondan "Sí, voy" o "No puedo". ¡Gracias!';
+  const cfg=DB.getObj('wa_config'); const link=cfg.link||WA_DEFAULT_LINK;
+  const done=()=>{ showToast('Mensaje copiado. Pégalo en el grupo','info'); window.open(link,'_blank'); };
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(msg).then(done,()=>{prompt('Copia este mensaje:',msg);window.open(link,'_blank');}); else {prompt('Copia este mensaje:',msg);window.open(link,'_blank');}
+}
+function asisBlock(key){
+  if(!CLOUD.on || ASIS_OK!==true) return '';
+  const act=DB.get('integrantes').filter(i=>(i.estado||'Activo')==='Activo');
+  if(!act.length) return '';
+  const st=id=>(ASIS[asisKey(key,id)]||{}).s||'';
+  const mine=act.find(i=>i.id===asisMe());
+  const cuando=fechaLarga(new Date(key+'T00:00:00')).toLowerCase();
+  let h='<section class="asis"><h3>¿Puedes el '+_esc(cuando)+'?</h3>';
+  if(!mine){
+    h+='<select id="asis-who" onchange="asisWho(this.value)"><option value="">Elige tu nombre…</option>'+act.map(i=>'<option value="'+i.id+'">'+_esc(i.nombre)+'</option>').join('')+'</select>';
+  } else {
+    const s=st(mine.id);
+    h+='<div class="asis-me">'+_esc(mine.nombre)+'</div><div class="asis-btns"><button class="asis-b si '+(s==='si'?'on':'')+'" onclick="asisResp(\''+key+'\',\''+mine.id+'\',\'si\')">Sí, voy</button><button class="asis-b no '+(s==='no'?'on':'')+'" onclick="asisResp(\''+key+'\',\''+mine.id+'\',\'no\')">No puedo</button></div>'
+      +'<button class="linklike" onclick="asisWho(\'\')">No soy '+_esc(mine.nombre.split(' ')[0])+'</button>';
+  }
+  h+='</section>';
+  if(CLOUD.editor){
+    const si=act.filter(i=>st(i.id)==='si'), no=act.filter(i=>st(i.id)==='no'), na=act.filter(i=>!st(i.id));
+    const chip=(i,c)=>'<button class="asis-chip '+c+'" title="Clic para cambiar" onclick="asisCycle(\''+key+'\',\''+i.id+'\')">'+_esc(i.nombre.split(' ')[0]+(i.nombre.split(' ')[1]?' '+i.nombre.split(' ')[1][0]+'.':''))+'</button>';
+    h+='<section class="asis-sum"><h3>Asistencia del equipo</h3><div class="asis-bar"><span><b>'+si.length+'</b>confirman</span><span><b>'+no.length+'</b>no pueden</span><span><b>'+na.length+'</b>sin responder</span></div>'
+      +'<div class="asis-chips">'+si.map(i=>chip(i,'si')).join('')+no.map(i=>chip(i,'no')).join('')+na.map(i=>chip(i,'na')).join('')+'</div>'
+      +(na.length?'<button class="btn-secondary" style="width:100%;justify-content:center" onclick="asisRemind(\''+key+'\')"><i class="fa-brands fa-whatsapp"></i> Recordar a los que faltan</button>':'')+'</section>';
+  }
+  return h;
+}
+function homeAssign(key){ openServicio(key); }
+function homeDuplicateFor(key){
+  const sls=DB.get('setlists').slice().sort((a,b)=>(b.fecha||'').localeCompare(a.fecha||''));
+  if(!sls.length){ showToast('Aún no hay Set Lists para copiar','warning'); return; }
+  const cuando=fechaLarga(new Date(key+'T00:00:00'));
+  document.querySelector('.dup-md')?.remove();
+  const md=document.createElement('div'); md.className='dup-md';
+  md.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:10001;display:flex;align-items:center;justify-content:center;';
+  md.innerHTML='<div style="background:var(--card);border-radius:12px;padding:22px;width:400px;max-width:92vw"><h3 style="font-size:15px;margin-bottom:6px">Copiar un Set List</h3><p style="font-size:13px;color:var(--text3);margin-bottom:12px">Se abrirá una copia para el '+_esc(cuando.toLowerCase())+'. Podrás ajustarla antes de guardar; el original no cambia.</p><select id="dup-src" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font:inherit;margin-bottom:14px">'+sls.map(x=>'<option value="'+x.id+'">'+_esc(x.nombre)+' · '+(x.fecha?_esc(x.fecha):'sin fecha')+'</option>').join('')+'</select><div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn-secondary" id="dup-cancel">Cancelar</button><button class="btn-primary" id="dup-ok">Crear copia</button></div></div>';
+  document.body.appendChild(md);
+  md.addEventListener('click',e=>{if(e.target===md)md.remove();});
+  md.querySelector('#dup-cancel').onclick=()=>md.remove();
+  md.querySelector('#dup-ok').onclick=()=>{ const id=md.querySelector('#dup-src').value; md.remove(); slDuplicate(id); document.getElementById('sl-fecha').value=key; slAssignDate=key; };
+}
+function pendBlock(list,sls,cans,ints){
+  const rows=[];
+  list.slice(0,4).filter(s=>!s.sl).forEach(s=>rows.push({i:'fa-list-ol',t:'Sin Set List: '+fechaLarga(s.start),s:'Asígnalo o copia uno anterior',a:"homeAssign('"+s.key+"')"}));
+  const bad=new Map();
+  list.slice(0,4).forEach(s=>{ if(s.sl) slEntries(s.sl).filter(e=>!e.blk&&e.c).forEach(e=>{ const t=(e.c.tonalidad||'').trim(); if(!t||t==='?') bad.set(e.c.id,e.c.titulo); }); });
+  if(bad.size) rows.push({i:'fa-music',t:bad.size+(bad.size===1?' canción sin tonalidad':' canciones sin tonalidad')+' en los próximos domingos',s:[...bad.values()].slice(0,3).join(', ')+(bad.size>3?'…':''),a:"showModule('canciones')"});
+  const nt=ints.filter(i=>(i.estado||'Activo')==='Activo'&&!(i.telefono||'').trim());
+  if(nt.length) rows.push({i:'fa-phone',t:nt.length+(nt.length===1?' integrante sin teléfono':' integrantes sin teléfono'),s:nt.slice(0,3).map(i=>i.nombre.split(' ')[0]).join(', ')+(nt.length>3?'…':''),a:"showModule('integrantes')"});
+  if(!rows.length) return '';
+  return '<section class="no-ro"><h3>Por completar</h3>'+rows.map(r=>'<div class="pend-row" onclick="'+r.a+'"><i class="fa '+r.i+'"></i><div>'+_esc(r.t)+'<small>'+_esc(r.s)+'</small></div></div>').join('')+'</section>';
+}
 function paintCountdown(){
   const el=document.getElementById('countdown'); if(!el||!el.dataset.t)return;
   const p=cdParts(new Date(+el.dataset.t));
@@ -1464,7 +1561,7 @@ function renderDashboard(){
       <header class="sheet-head"><div><div class="sheet-when">${_esc(fechaLarga(next.start))}</div><div class="sheet-sub">${_esc(next.data.nombre||(sl&&sl.nombre)||'Servicio dominical')} — ${next.time} h</div></div><div class="countdown" id="countdown" data-t="${next.start.getTime()}"></div></header>
       ${times}
       ${sl?`<ol class="cues">${cues||'<li class="cue cue-free" style="--c:#7a8599"><span class="cue-n">–</span><div><div class="cue-t">Este Set List aún no tiene canciones</div></div><span></span></li>'}</ol>`
-         :`<div class="sheet-empty"><p>Este servicio todavía no tiene un Set List asignado.</p></div>`}
+         :`<div class="sheet-empty"><p>Este servicio todavía no tiene un Set List asignado.</p><div class="acts no-ro"><button class="btn-primary" onclick="homeDuplicateFor('${next.key}')"><i class="fa fa-copy"></i> Copiar un Set List anterior</button><button class="btn-secondary" onclick="homeAssign('${next.key}')"><i class="fa fa-link"></i> Asignar uno existente</button></div></div>`}
       <footer class="sheet-foot">${sl?`<button class="btn-primary" onclick="verPrograma('${sl.id}')"><i class="fa fa-list-ul"></i> Programa completo</button><button class="btn-secondary" onclick="editSetlist('${sl.id}')"><i class="fa fa-pen"></i> Editar</button><button class="btn-secondary" onclick="whatsappSetlist('${sl.id}')"><i class="fa-brands fa-whatsapp"></i> Enviar por WhatsApp</button>`:''}</footer>
     </article>`;
     // Lateral: equipo y consideraciones
@@ -1474,9 +1571,10 @@ function renderDashboard(){
     else { const asg=(next.data.integrantes||[]).map(id=>ints.find(i=>i.id===id)).filter(Boolean); crewHtml=asg.length?asg.map(m=>'<div class="crew"><span class="crew-role">'+_esc(m.instrumento||'')+'</span><span class="crew-name">'+_esc(m.nombre)+'</span></div>').join(''):'<p style="color:var(--text3);font-size:14px">La formación aún no está definida.</p>'; }
     const cons=sl?(sl.consid||'').split('\n').map(x=>x.trim()).filter(Boolean):[];
     const ens=DB.get('ensayos').filter(e=>e.estado==='Programado'&&new Date(e.fecha+'T23:59:59')>=now).sort((a,b)=>a.fecha.localeCompare(b.fecha))[0];
-    side=`<section><h3>Equipo del domingo</h3>${crewHtml}</section>`
+    side=asisBlock(next.key)+`<section><h3>Equipo del domingo</h3>${crewHtml}</section>`
       +(cons.length?`<section><h3>Consideraciones</h3><ul class="rules">${cons.slice(0,3).map(x=>'<li>'+_fmt(x)+'</li>').join('')}</ul>${cons.length>3?`<button class="linklike" onclick="verPrograma('${sl.id}')">Ver las ${cons.length}</button>`:''}</section>`:'')
-      +(ens?`<section><h3>Próximo ensayo</h3><div class="crew"><span class="crew-role">${_esc(fechaLarga(new Date(ens.fecha+'T00:00:00')))}</span><span class="crew-name">${_esc(ens.hora||'')}${ens.hora?' h':''}</span></div></section>`:'');
+      +(ens?`<section><h3>Próximo ensayo</h3><div class="crew"><span class="crew-role">${_esc(fechaLarga(new Date(ens.fecha+'T00:00:00')))}</span><span class="crew-name">${_esc(ens.hora||'')}${ens.hora?' h':''}</span></div></section>`:'')
+      +((!CLOUD.on||CLOUD.editor)?pendBlock(list,sls,cans,ints):'');
   }
   const laterHtml=later.length?`<section class="later"><h3>Los domingos que siguen</h3>${later.map(s=>`<div class="later-row" ${s.sl?`onclick="verPrograma('${s.sl.id}')"`:''}><div class="later-d">${s.start.getDate()}<small>${_esc(s.start.toLocaleDateString('es-CL',{month:'short'}))}</small></div><div><div class="later-n">${_esc(s.data.nombre||'Servicio dominical')}</div><div class="later-s">${s.sl?_esc(s.sl.nombre):'Sin Set List asignado'}</div></div><span class="later-s">${s.sl?slEntries(s.sl).filter(e=>!e.blk).length+' canciones':''}</span></div>`).join('')}</section>`:'';
   root.innerHTML=`<div class="home-grid"><div>${main}</div><aside class="side">${side}</aside></div>${laterHtml}
@@ -1746,6 +1844,7 @@ function renderSetlists(){
 }
 
 function openModalSetlist(id){
+  slAssignDate=null;
   slCurrentSongs=[]; slMeta={};
   document.getElementById('sl-edit-id').value='';
   document.getElementById('modal-setlist-title').textContent='Nuevo Set List';
@@ -1951,6 +2050,7 @@ function saveSetlist(){
     inicio:document.getElementById('sl-inicio').value,formacion:document.getElementById('sl-formacion').value,consid:document.getElementById('sl-consid').value};
   if(id){const idx=data.findIndex(x=>x.id===id);data[idx]=obj;}else data.push(obj);
   DB.set('setlists',data);closeModal('modal-setlist');renderSetlists();
+  if(slAssignDate&&!id){ const sv=DB.getObj('servicios'); sv[slAssignDate]=Object.assign({nombre:'Servicio Dominical',integrantes:[],notas:''},sv[slAssignDate]||{},{setlistId:obj.id}); DB.set('servicios',sv); slAssignDate=null; showToast('Set list creado y asignado al domingo'); try{if(document.getElementById('home'))renderDashboard();}catch(e){} return; }
   showToast(id?'Set list actualizado':'Set list creado');
 }
 function deleteSetlist(id){
