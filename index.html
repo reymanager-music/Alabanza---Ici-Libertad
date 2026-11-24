@@ -4128,8 +4128,7 @@ function lsMkSection(sec,si){
   if(lsEditMode){
     const acts=document.createElement('div');
     acts.style.cssText='display:flex;gap:4px;flex-shrink:0;';
-    [['↑','lsMoveSection('+si+',-1)'],['↓','lsMoveSection('+si+',1)'],
-     ['+fila','lsAddRow('+si+')'],['−fila','lsDelRow('+si+')'],
+    [['+fila','lsAddRow('+si+')'],['−fila','lsDelRow('+si+')'],
      ['✕ sec','lsDelSection('+si+')']].forEach(([t,fn])=>{
       const b=document.createElement('button');
       b.textContent=t; b.onclick=new Function(fn);
@@ -4141,6 +4140,14 @@ function lsMkSection(sec,si){
   }
   hdr.insertBefore(lbl,hdr.firstChild);
   hdr.insertBefore(info,hdr.children[1]);
+  div.dataset.si=si;
+  if(lsEditMode){
+    const hd=document.createElement('div'); hd.className='ls-grip'; hd.textContent='⠿'; hd.title='Mantén presionado y arrastra para mover la sección';
+    hd.style.cssText='width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:18px;line-height:1;color:#64748b;cursor:grab;border-radius:5px;background:#eef2f7;flex-shrink:0;touch-action:none;user-select:none;-webkit-user-select:none;';
+    hd.addEventListener('pointerdown',e=>lsDragStart(e,si,div,true));
+    hdr.insertBefore(hd,hdr.firstChild);
+    hdr.style.cursor='grab'; hdr.addEventListener('pointerdown',e=>{ if(e.target.closest('button,.ls-grip,input,textarea')) return; if(e.pointerType==='touch') return; lsDragStart(e,si,div,false); });
+  }
   div.appendChild(hdr);
 
   const nrows=sec.rows.length;
@@ -4252,6 +4259,54 @@ function lsDelRow(si,ri){
   lsSong.sections[si].rows.splice(ri,1); if(lsSong.sections[si].lyrics)lsSong.sections[si].lyrics.splice(ri,1); lsRender();
 }
 function lsDelSection(si){ if(!confirm(`¿Eliminar sección "${lsSong.sections[si].label}: ${lsSong.sections[si].name}"?`))return; lsSong.sections.splice(si,1); lsRender(); }
+// ── Arrastrar secciones: mantén presionada el asa ⠿ (o la cabecera con el mouse) y suelta en la nueva posición ──
+let LSDRAG=null;
+function lsDragStart(e,si,div,fromGrip){
+  if(e.button>0||LSDRAG) return; e.preventDefault();
+  const chart=document.getElementById('ls-chart'); if(!chart) return;
+  LSDRAG={si,div,chart,y0:e.clientY,active:false,to:si,y:e.clientY,raf:0};
+  if(getComputedStyle(chart).position==='static') chart.style.position='relative';
+  document.addEventListener('pointermove',lsDragMove); document.addEventListener('pointerup',lsDragEnd); document.addEventListener('pointercancel',lsDragEnd); document.addEventListener('keydown',lsDragKey);
+}
+function lsDragScroller(el){ while(el&&el!==document.body){ const o=getComputedStyle(el).overflowY; if((o==='auto'||o==='scroll')&&el.scrollHeight>el.clientHeight+4) return el; el=el.parentElement; } return null; }
+function lsDragIdx(y){ const kids=[...LSDRAG.chart.children].filter(k=>k.dataset&&k.dataset.si!==undefined); let idx=0; kids.forEach(k=>{ const r=k.getBoundingClientRect(); if(y>r.top+r.height/2) idx++; }); return {idx,kids}; }
+function lsDragMove(e){
+  const D=LSDRAG; if(!D) return; D.y=e.clientY;
+  if(!D.active){ if(Math.abs(e.clientY-D.y0)<5) return; D.active=true;
+    D.div.style.opacity='.35'; document.body.style.userSelect='none'; document.body.style.cursor='grabbing';
+    const sec=lsSong.sections[D.si];
+    const g=document.createElement('div'); g.id='ls-ghost'; g.textContent='⠿ '+sec.label+' · '+sec.name;
+    g.style.cssText='position:fixed;z-index:100001;pointer-events:none;padding:7px 14px;background:#1e3a8a;color:#fff;border-radius:8px;font:700 13px sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35);left:0;top:0;';
+    document.body.appendChild(g); D.ghost=g;
+    const ln=document.createElement('div'); ln.id='ls-dropline'; ln.style.cssText='position:absolute;left:0;right:0;height:4px;margin-top:-2px;background:#2563eb;border-radius:2px;pointer-events:none;z-index:5;box-shadow:0 0 0 2px rgba(37,99,235,.25);';
+    D.chart.appendChild(ln); D.line=ln;
+    D.sc=lsDragScroller(D.chart);
+    const tick=()=>{ if(!LSDRAG) return; const vh=window.innerHeight,y=LSDRAG.y; let dy=0; if(y<70) dy=-Math.ceil((70-y)/5); else if(y>vh-70) dy=Math.ceil((y-(vh-70))/5);
+      if(dy){ if(LSDRAG.sc) LSDRAG.sc.scrollTop+=dy; else window.scrollBy(0,dy); } lsDragPlace(); LSDRAG.raf=requestAnimationFrame(tick); };
+    D.raf=requestAnimationFrame(tick);
+  }
+  D.ghost.style.transform='translate('+(e.clientX+14)+'px,'+(e.clientY+10)+'px)'; lsDragPlace();
+}
+function lsDragPlace(){
+  const D=LSDRAG; if(!D||!D.active) return; const {idx,kids}=lsDragIdx(D.y); D.to=idx;
+  const cr=D.chart.getBoundingClientRect(); let top;
+  if(idx<kids.length) top=kids[idx].getBoundingClientRect().top-cr.top-7; else top=kids[kids.length-1].getBoundingClientRect().bottom-cr.top+3;
+  D.line.style.top=(top+D.chart.scrollTop)+'px';
+  D.line.style.display=(idx===D.si||idx===D.si+1)?'none':'block';
+}
+function lsDragCleanup(){
+  const D=LSDRAG; if(!D) return; cancelAnimationFrame(D.raf);
+  document.removeEventListener('pointermove',lsDragMove); document.removeEventListener('pointerup',lsDragEnd); document.removeEventListener('pointercancel',lsDragEnd); document.removeEventListener('keydown',lsDragKey);
+  D.ghost&&D.ghost.remove(); D.line&&D.line.remove(); D.div.style.opacity=''; document.body.style.userSelect=''; document.body.style.cursor=''; LSDRAG=null;
+}
+function lsDragKey(e){ if(e.key==='Escape') lsDragCleanup(); }
+function lsDragEnd(e){
+  const D=LSDRAG; if(!D) return; const was=D.active; let to=D.to; const from=D.si; lsDragCleanup();
+  if(!was) return; if(to>from) to--; if(to===from) return;
+  const [m]=lsSong.sections.splice(from,1); lsSong.sections.splice(to,0,m); lsRender();
+  const el=document.querySelector('#ls-chart [data-si="'+to+'"]'); if(el){ el.style.transition='background .9s'; el.style.background='#dbeafe'; el.style.borderRadius='6px'; setTimeout(()=>{ el.style.background=''; },1100); try{ el.scrollIntoView({block:'nearest',behavior:'smooth'}); }catch(_){} }
+  showToast('Sección «'+m.name+'» movida a la posición '+(to+1),'info');
+}
 function lsMoveSection(si,dir){ const t=si+dir; if(t<0||t>=lsSong.sections.length)return; [lsSong.sections[si],lsSong.sections[t]]=[lsSong.sections[t],lsSong.sections[si]]; lsRender(); }
 function lsDelMeasure(si,ri,ci){ const row=lsSong.sections[si].rows[ri]; if(row.length<=1){if(confirm('Único compás. ¿Eliminar la fila?'))lsDelRow(si,ri);return;} row.splice(ci,1); lsRender(); }
 
