@@ -1,6 +1,6 @@
 // Service worker — Alabanza ICI. Estrategia: la página SIEMPRE intenta la red primero (así tus
 // actualizaciones aparecen al instante); si no hay conexión, usa la última copia guardada.
-const VERSION='v4-2026-11-24';
+const VERSION='v4-2026-11-24b';
 const SHELL = `shell-${VERSION}`;
 const RUNTIME = 'runtime-v3';
 const PRECACHE = ['./', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-64.png'];

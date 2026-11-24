@@ -4452,7 +4452,7 @@ function impParseChart(txt){
   const isChordLine=l=>{ const tk=toks(l); return tk.length>0&&tk.every(impChordTok); };
   const header=l=>{ let m=l.match(/^[\[\(]\s*([^\]\)]+?)\s*[\]\)]\s*(?:[x×]\s*(\d+))?\s*:?\s*$/); if(m&&impIsSecText(m[1])) return m;
     if(impIsSecText(l)&&l.length<28&&!isChordLine(l)){ m=l.match(/^([^:]+?)\s*:?\s*(?:[x×]\s*(\d+))?\s*$/); if(m) return m; } return null; };
-  const open=(name,rep)=>{ cur={name:impSecName(name),bars:[],cues:[],rep:rep||0}; blocks.push(cur); };
+  const open=(name,rep)=>{ let nm=impSecName(name); const q=(name.match(/\b(\d+)\b/)||[])[1]; if(q&&/^(VERSO|CORO|PRE-CORO|PUENTE|INTERLUDIO)$/.test(nm)) nm+=' '+q; else if(/(final|[uú]ltim)/i.test(name)&&/^(CORO|VERSO)$/.test(nm)) nm+=' FINAL'; cur={name:nm,orig:name.trim(),bars:[],cues:[],rep:rep||0}; blocks.push(cur); };
   const addBars=(tk,cue)=>{ if(!cur){ cur={name:'SECCIÓN 1',bars:[],cues:[],rep:0}; blocks.push(cur); } tk.forEach((t,k)=>{ cur.bars.push([[/^N\.?C\.?$/i.test(t)?'N.C.':t,4]]); cur.cues.push(k===0?cue:''); }); };
   const nextLyric=i=>{ for(let j=i+1;j<lines.length;j++){ if(!lines[j]) continue; if(isChordLine(lines[j])||header(lines[j])) return ''; return lines[j]; } return ''; };
   for(let i=0;i<lines.length;i++){
@@ -4484,12 +4484,12 @@ function impBuild(res,semi,flats){
   const uniq=[], seq=[]; const L='ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   res.blocks.forEach(b=>{
     const bars=tr(b.bars); const sig=b.name+'|'+JSON.stringify(bars)+'|'+b.rep;
-    let u=uniq.find(x=>x.sig===sig); if(!u){ u={sig,label:L[uniq.length]||'X',name:b.name,bars,cues:b.cues,rep:b.rep}; uniq.push(u); }
+    let u=uniq.find(x=>x.sig===sig); if(!u){ u={sig,label:L[uniq.length]||'X',name:b.name,orig:b.orig,bars,cues:b.cues,rep:b.rep}; uniq.push(u); }
     seq.push(u);
   });
   const sections=uniq.map((u,ui)=>{
     const rows=[],lyrics=[]; for(let i=0;i<u.bars.length;i+=4){ rows.push(u.bars.slice(i,i+4)); const w=u.cues.slice(i,i+4).join(' ').replace(/\s+/g,' ').trim().split(' ').filter(Boolean); lyrics.push(w.length?w.slice(0,6).join(' ')+(w.length>6?'…':''):''); }
-    const sec={label:u.label,name:u.name,repeat:!!u.rep,last:ui===uniq.length-1,note:u.rep?'×'+u.rep:'',desc:res.estimated?'⚠️ Compases estimados (1 acorde = 1 compás): verificar con la grabación':'',rows};
+    const sec={label:u.label,name:u.name,_orig:u.orig,repeat:!!u.rep,last:ui===uniq.length-1,note:u.rep?'×'+u.rep:'',desc:res.estimated?'⚠️ Compases estimados (1 acorde = 1 compás): verificar con la grabación':'',rows};
     if(lyrics.some(Boolean)) sec.lyrics=lyrics; return sec; });
   const form=(res.form&&res.form.length)?res.form.map(f=>{ const m=f.match(/^(.+?)\s*[x×]\s*(\d+)$/i); const nm=impSecName(m?m[1]:f); const u=uniq.find(x=>x.name===nm); return nm+(u?'('+u.label+')':'')+(m?' ×'+m[2]:''); }).join(' → ')
     : seq.map((u,i)=>u.name+'('+u.label+')'+(u.rep?' ×'+u.rep:'')).join(' → ');
@@ -4557,7 +4557,7 @@ function impPreview(md){
   let h=`<div style="padding:10px 12px;background:#171a20;border-radius:8px;margin-bottom:10px;line-height:1.7">`
    +`<b>${(res.meta.title||'').replace(/</g,'&lt;')||'(sin título)'}</b> · Tono de origen: <b>${nm(sh.src)}</b>${sh.semi?` → se transpone a <b>${nm(sh.tgt)}</b> (${sh.semi>0?'+':''}${sh.semi})`:''} · ${res.meta.time} · ${res.meta.bpm?res.meta.bpm+' BPM':'sin BPM'}<br>`
    +`<span style="color:#9aa3b2">Forma:</span> ${b.form.replace(/</g,'&lt;')}<br><span style="color:#9aa3b2">${b.sections.length} secciones únicas · ${total} compases en total</span></div>`;
-  h+=b.sections.map(s=>`<div style="margin-bottom:8px"><div style="font-weight:700;color:#93c5fd">${s.label} · ${s.name}${s.note?' '+s.note:''} <span style="font-weight:400;color:#8a93a3">(${s.rows.reduce((a,r)=>a+r.length,0)} compases)</span></div>`
+  h+=b.sections.map(s=>`<div style="margin-bottom:8px"><div style="font-weight:700;color:#93c5fd">${s.label} · ${s.name}${s.note?' '+s.note:''}${s._orig&&s._orig.toUpperCase()!==s.name?' <span style="font-weight:400;color:#8a93a3">(en el cifrado: «'+s._orig.replace(/</g,'&lt;')+'»)</span>':''} <span style="font-weight:400;color:#8a93a3">(${s.rows.reduce((a,r)=>a+r.length,0)} compases)</span></div>`
     +s.rows.map(r=>`<div style="font-family:monospace;font-size:12px;color:#d6dbe5">| ${r.map(bar=>bar.map(([c,t])=>(c||'—')+(t<4&&bar.length>1?'':'')).join(' ')).join(' | ')} |</div>`).join('')+'</div>').join('');
   if(res.estimated) h+='<div style="color:#fcd34d;margin-top:6px">⚠️ Un cifrado no trae la duración de los acordes: asumí 1 acorde = 1 compás. La <b>forma</b> sigue el orden del cifrado. Ajusta compases y forma según la versión que toca el equipo.'+(res.meta.tonoEst?' El tono es una estimación por el primer acorde.':'')+'</div>';
   if(res.notes&&res.notes.length) h+='<div style="color:#fcd34d;margin-top:6px">'+res.notes.map(n=>'⚠️ '+n.replace(/</g,'&lt;')).join('<br>')+'</div>';
@@ -4570,7 +4570,7 @@ function impApply(md){
   if(lsSong.sections&&lsSong.sections.length&&!confirm('Esto reemplaza las secciones actuales de este lead sheet. ¿Continuar? (No se guarda hasta que pulses Guardar.)')) return;
   const kn=(pc,minor)=>pc===undefined?'':(sh.flats?IMP_FL:IMP_SH)[pc]+(minor?'m':'');
   const tonic=kn(sh.tgt!==undefined?sh.tgt:sh.src,sh.minor);
-  lsSong.sections=b.sections; lsSong.form=b.form;
+  lsSong.sections=b.sections.map(x=>{ const y=Object.assign({},x); delete y._orig; return y; }); lsSong.form=b.form;
   if(r.meta.time) lsSong.time=r.meta.time;
   if(r.meta.bpm) lsSong.bpm=r.meta.bpm;
   if(tonic){ lsSong.key=tonic.replace(/m$/,'')+(sh.minor?' menor':' Mayor'); lsSong.originalKey=tonic; }
