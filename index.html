@@ -1740,16 +1740,17 @@ function renderPartituras(){
   if(curVal) d=d.filter(p=>p.cancionId===curVal);
   const g=document.getElementById('partitura-grid');
   if(!d.length&&!cans.length){g.innerHTML='<div class="empty-state" style="grid-column:1/-1"><i class="fa fa-file-alt"></i><p>No hay partituras</p></div>';return;}
-  const sheetOf=cid=>{ const x=DB.getRaw('ls_'+cid)||LS[cid]; return (x&&x.sections&&x.sections.length)?x:null; };
   const canEd=!CLOUD.on||CLOUD.editor;
+  const sheetOf=cid=>{ const x=DB.getRaw('ls_'+cid)||LS[cid]; if(x&&x.sections&&x.sections.length) return x; if(canEd){ const c=cans.find(y=>y.id===cid); if(c) return {tpl:true,sections:lsTemplate(c).sections}; } return null; };
   const lsParts=d.filter(p=>p.tipo==='Lead Sheet'), others=d.filter(p=>p.tipo!=='Lead Sheet');
   const lsCards=cans.filter(c=>!curVal||c.id===curVal).map(c=>lsParts.find(x=>x.cancionId===c.id)||{id:'v_'+c.id,cancionId:c.id,tipo:'Lead Sheet',instrumento:'General',notas:'',virtual:true});
   const orphans=lsParts.filter(p=>!cans.some(c=>c.id===p.cancionId));
-  const ready=lsCards.filter(p=>sheetOf(p.cancionId)), pending=lsCards.filter(p=>!sheetOf(p.cancionId));
+  const shMap={}; lsCards.forEach(p=>{ shMap[p.cancionId]=sheetOf(p.cancionId); });
+  const ready=lsCards.filter(p=>shMap[p.cancionId]&&!shMap[p.cancionId].tpl).concat(lsCards.filter(p=>shMap[p.cancionId]&&shMap[p.cancionId].tpl)), pending=lsCards.filter(p=>!shMap[p.cancionId]);
   const card=p=>{
     const c=cans.find(x=>x.id===p.cancionId), sh=p.tipo==='Lead Sheet'?sheetOf(p.cancionId):null, isLS=p.tipo==='Lead Sheet';
     const nombre=isLS&&c?'Lead Sheet — '+c.titulo:p.nombre;
-    const badge=isLS?(sh?`<span class="badge badge-green">Listo · ${sh.sections.length} secciones</span>`:'<span class="badge" style="background:rgba(148,163,184,.15);color:#94a3b8">Sin lead sheet</span>'):`<span class="badge badge-yellow">${p.tipo}</span>`;
+    const badge=isLS?(sh?(sh.tpl?`<span class="badge badge-blue">Lista para editar · ${sh.sections.length} secciones</span>`:`<span class="badge badge-green">Listo · ${sh.sections.length} secciones</span>`):'<span class="badge" style="background:rgba(148,163,184,.15);color:#94a3b8">Sin lead sheet</span>'):`<span class="badge badge-yellow">${p.tipo}</span>`;
     const btn=isLS?(sh?`<button class="action-btn" style="background:var(--primary);color:#fff;border:none;" onclick="openLeadSheet('${p.cancionId}')">✏️ Abrir Lead Sheet</button>`
         :(canEd?`<button class="action-btn" style="background:var(--primary);color:#fff;border:none;" onclick="openLeadSheet('${p.cancionId}')">➕ Crear Lead Sheet</button>`:'<span style="font-size:12px;color:var(--text3)">Pendiente</span>')):'';
     return `<div class="partitura-card" ${isLS&&!sh?'style="opacity:.8"':''}>
@@ -4036,6 +4037,16 @@ const LS_BORRADORES = Object.assign({}, LS);
 // ══ LEAD SHEET ENGINE ════════════════════════════════════════════════════
 let lsSong=null, lsEditMode=false, lsMSRC=null, lsMWork=[];
 
+// Plantilla de partida (misma estructura que Hosanna/Poderoso): secciones y compases vacíos, sin inventar acordes.
+function lsTemplate(c){
+  const bar=()=>[["",4]], row=()=>[bar(),bar(),bar(),bar()];
+  const tn=(c.tonalidad&&c.tonalidad!=='?')?c.tonalidad.trim():'';
+  const sec=(label,name,rows,last,desc)=>({label,name,repeat:false,last,note:'',desc:desc||'',rows:Array.from({length:rows},row),lyrics:Array.from({length:rows},()=>'')});
+  const d='Plantilla: escribe los acordes (clic en cada compás) y ajusta filas con +fila / −fila';
+  return {title:c.titulo,composer:c.artista||'',key:tn?tn.replace(/m$/,'')+(/m$/.test(tn)?' menor':' Mayor'):'',originalKey:tn,bpm:c.bpm||'',time:'4/4',style:c.genero||'',
+    form:'INTRO(A) → VERSO(B) → CORO(C) → VERSO(B) → CORO(C) → PUENTE(D) → CORO(C)',
+    sections:[sec('A','INTRO',1,false,d),sec('B','VERSO',2,false),sec('C','CORO',2,false),sec('D','PUENTE',2,true)]};
+}
 function openLeadSheet(cancionId){
   const saved = DB.getRaw('ls_'+cancionId);
   lsSong = saved ? saved : (LS[cancionId] ? JSON.parse(JSON.stringify(LS[cancionId])) : null);
@@ -4043,8 +4054,7 @@ function openLeadSheet(cancionId){
   if(!lsSong){
     const canEdit=!CLOUD.on||CLOUD.editor; const c=DB.get('canciones').find(x=>x.id===cancionId);
     if(!canEdit||!c){ alert('Esta canción aún no tiene lead sheet.'); return; }
-    lsSong={title:c.titulo,composer:c.artista||'',key:'',originalKey:(c.tonalidad&&c.tonalidad!=='?')?c.tonalidad:'',bpm:c.bpm||'',time:'4/4',style:c.genero||'',form:'',sections:[]};
-    lsFresh=true;
+    lsSong=lsTemplate(c); lsFresh=true;
   }
   lsSong._cancionId = cancionId;
   lsEditMode = false;
@@ -4055,7 +4065,7 @@ function openLeadSheet(cancionId){
   document.getElementById('ls-add-sec-btn').style.display='none';
   document.getElementById('ls-imp-btn').style.display='none';
   lsRender();
-  if(lsFresh){ lsToggleEdit(); showToast('Hoja vacía: agrega secciones o usa ⬇️ Importar acordes','info'); }
+  if(lsFresh){ lsToggleEdit(); showToast('Plantilla lista: clic en un compás para escribir el acorde, o usa ⬇️ Importar acordes','info'); }
 }
 
 function closeLeadSheet(){ document.getElementById('ls-overlay').style.display='none'; }
